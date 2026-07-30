@@ -1,0 +1,33 @@
+name: Top up LAYA Meta Buffer queue
+
+on:
+  schedule:
+    # Runs daily at 08:00 UTC (4:00 PM Manila). Adjust as you like.
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (log only, don't create posts)"
+        type: boolean
+        default: false
+
+jobs:
+  schedule-posts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run scheduler
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          BUFFER_ORG_ID: ${{ secrets.BUFFER_ORG_ID }}
+          BUFFER_CHANNEL_IDS: ${{ secrets.BUFFER_CHANNEL_IDS }}
+          BUFFER_MIN_DATE: ${{ secrets.BUFFER_MIN_DATE }}
+          GOOGLE_DRIVE_API_KEY: ${{ secrets.GOOGLE_DRIVE_API_KEY }}
+          LAYA_ROOT_FOLDER_ID: ${{ secrets.LAYA_ROOT_FOLDER_ID }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: node schedule-laya-meta-posts.js
