@@ -209,6 +209,23 @@ async function bufferRequest(query, variables) {
   return data.data;
 }
 
+async function getChannelServices(channelIds) {
+  const query = `
+    query Channels($organizationId: OrganizationId!) {
+      channels(input: { organizationId: $organizationId }) {
+        id
+        service
+      }
+    }
+  `;
+  const data = await bufferRequest(query, { organizationId: ORG_ID });
+  const map = {};
+  for (const ch of data.channels) {
+    if (channelIds.includes(ch.id)) map[ch.id] = ch.service;
+  }
+  return map;
+}
+
 async function getOrgScheduledPostLimit() {
   const query = `
     query Account {
@@ -239,7 +256,7 @@ async function getScheduledDates(channelId) {
   return new Set(data.posts.edges.map((e) => e.node.dueAt.slice(0, 10)));
 }
 
-async function createPost({ channelId, fileId, title, dueAtIso }) {
+async function createPost({ channelId, service, fileId, title, dueAtIso }) {
   const mutation = `
     mutation CreatePost($input: CreatePostInput!) {
       createPost(input: $input) {
@@ -264,8 +281,19 @@ async function createPost({ channelId, fileId, title, dueAtIso }) {
       },
     ],
   };
+
+  // Some networks require an explicit post "type" in their metadata block —
+  // Buffer's default doesn't infer this for you, so omitting it throws
+  // "Facebook posts require a type (post, story, or reel)" style errors.
+  if (service === "facebook") {
+    input.metadata = { facebook: { type: "post" } };
+  } else if (service === "instagram") {
+    input.metadata = { instagram: { type: "post", shouldShareToFeed: true } };
+  }
+  // Threads, LinkedIn, TikTok don't require an explicit type — leave as-is.
+
   if (DRY_RUN) {
-    console.log(`[DRY RUN] Would create post: channel=${channelId} dueAt=${dueAtIso} title="${title}"`);
+    console.log(`[DRY RUN] Would create post: channel=${channelId} (${service}) dueAt=${dueAtIso} title="${title}"`);
     return;
   }
   const data = await bufferRequest(mutation, { input });
@@ -273,7 +301,7 @@ async function createPost({ channelId, fileId, title, dueAtIso }) {
   if (payload.message) {
     throw new Error(`createPost failed: ${payload.message}`);
   }
-  console.log(`Scheduled: channel=${channelId} dueAt=${dueAtIso} title="${title}" -> post ${payload.post.id}`);
+  console.log(`Scheduled: channel=${channelId} (${service}) dueAt=${dueAtIso} title="${title}" -> post ${payload.post.id}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -289,15 +317,27 @@ async function main() {
   const limit = await getOrgScheduledPostLimit();
   console.log(`Buffer scheduled-post limit per channel: ${limit}`);
 
+  const services = await getChannelServices(CHANNEL_IDS);
+
   const today = new Date().toISOString().slice(0, 10);
 
   for (const channelId of CHANNEL_IDS) {
+    const service = services[channelId] || "unknown";
     const channelMinDate = minDateFor(channelId);
-    console.log(`\nChannel ${channelId} — minimum date: ${channelMinDate || "(none — starts today)"}`);
+    console.log(`\nChannel ${channelId} (${service}) — minimum date: ${channelMinDate || "(none — starts today)"}`);
 
-    const scheduledDates = await getScheduledDates(channelId);
+    let scheduledDates;
+    try {
+      scheduledDates = await getScheduledDates(channelId);
+    } catch (err) {
+      console.error(`Skipping channel ${channelId}: couldn't read current schedule (${err.message})`);
+      continue; // don't let one channel's failure abort the whole run
+    }
     let scheduledCount = scheduledDates.size;
     console.log(`Channel ${channelId}: ${scheduledCount}/${limit} slots currently used.`);
+
+    let consecutiveFailures = 0;
+    const MAX_CONSECUTIVE_FAILURES = 3; // stop hammering the API once something's clearly wrong
 
     for (const dateKey of sortedDates) {
       if (scheduledCount >= limit) break;
@@ -309,16 +349,25 @@ async function main() {
       const dueAtIso = `${dateKey}T${POST_TIME_LOCAL}${POST_UTC_OFFSET}`;
 
       try {
-        await createPost({ channelId, fileId, title, dueAtIso });
+        await createPost({ channelId, service, fileId, title, dueAtIso });
         scheduledCount++;
+        consecutiveFailures = 0;
       } catch (err) {
         console.error(`Failed to schedule ${dateKey} on ${channelId}: ${err.message}`);
+        consecutiveFailures++;
         if (/limit/i.test(err.message)) break;
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          console.error(
+            `Stopping this channel after ${consecutiveFailures} consecutive failures — ` +
+              `likely a real problem, not worth burning more API calls retrying.`
+          );
+          break;
+        }
       }
     }
   }
 
-  console.log("Run complete.");
+  console.log("\nRun complete.");
 }
 
 main().catch((err) => {
