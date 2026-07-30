@@ -34,9 +34,15 @@
  *   LAYA_ROOT_FOLDER_ID   Drive folder ID of the top-level "LAYA" folder
  *                         (the one containing year folders like "2026")
  * Optional:
- *   BUFFER_MIN_DATE       Skip scheduling any date before this (YYYY-MM-DD).
- *                         Set to the day after whatever you already filled
- *                         in manually, to avoid duplicates.
+ *   BUFFER_MIN_DATE       Default skip-before date (YYYY-MM-DD) applied to
+ *                         any channel not given its own override below.
+ *   BUFFER_CHANNEL_MIN_DATES
+ *                         Per-channel overrides, comma-separated
+ *                         "channelId=YYYY-MM-DD" pairs. Leave the date part
+ *                         empty (e.g. "channelId=") to mean "no minimum —
+ *                         start scheduling from today" for that channel,
+ *                         overriding BUFFER_MIN_DATE for just that one.
+ *                         Example: "chanA=2026-08-13,chanB=2026-08-13,chanC="
  *   POST_TIME_LOCAL       Default "19:00:00" (7 PM)
  *   POST_UTC_OFFSET       Default "+08:00" (Asia/Manila)
  *   DRY_RUN                "true" to log without creating posts
@@ -50,7 +56,28 @@ const CHANNEL_IDS = requireEnv("BUFFER_CHANNEL_IDS").split(",").map((s) => s.tri
 const DRIVE_API_KEY = requireEnv("GOOGLE_DRIVE_API_KEY");
 const ROOT_FOLDER_ID = requireEnv("LAYA_ROOT_FOLDER_ID");
 
-const MIN_DATE = process.env.BUFFER_MIN_DATE || null;
+const DEFAULT_MIN_DATE = process.env.BUFFER_MIN_DATE || null;
+
+// Parse per-channel min-date overrides, e.g. "chanA=2026-08-13,chanB="
+function parseChannelMinDates(raw) {
+  const map = {};
+  if (!raw) return map;
+  for (const pair of raw.split(",")) {
+    const [channelId, date] = pair.split("=").map((s) => (s || "").trim());
+    if (!channelId) continue;
+    map[channelId] = date || null; // empty string -> null -> no minimum
+  }
+  return map;
+}
+const CHANNEL_MIN_DATES = parseChannelMinDates(process.env.BUFFER_CHANNEL_MIN_DATES);
+
+// Returns the effective minimum date for a given channel: its own override
+// if one was provided (even if that override is "no minimum"), otherwise
+// the account-wide default.
+function minDateFor(channelId) {
+  return channelId in CHANNEL_MIN_DATES ? CHANNEL_MIN_DATES[channelId] : DEFAULT_MIN_DATE;
+}
+
 const POST_TIME_LOCAL = process.env.POST_TIME_LOCAL || "19:00:00"; // 7 PM
 const POST_UTC_OFFSET = process.env.POST_UTC_OFFSET || "+08:00"; // Asia/Manila
 const DRY_RUN = process.env.DRY_RUN === "true";
@@ -261,13 +288,13 @@ async function main() {
 
   const limit = await getOrgScheduledPostLimit();
   console.log(`Buffer scheduled-post limit per channel: ${limit}`);
-  if (MIN_DATE) {
-    console.log(`Minimum date: ${MIN_DATE} (earlier dates skipped, already scheduled manually)`);
-  }
 
   const today = new Date().toISOString().slice(0, 10);
 
   for (const channelId of CHANNEL_IDS) {
+    const channelMinDate = minDateFor(channelId);
+    console.log(`\nChannel ${channelId} — minimum date: ${channelMinDate || "(none — starts today)"}`);
+
     const scheduledDates = await getScheduledDates(channelId);
     let scheduledCount = scheduledDates.size;
     console.log(`Channel ${channelId}: ${scheduledCount}/${limit} slots currently used.`);
@@ -275,7 +302,7 @@ async function main() {
     for (const dateKey of sortedDates) {
       if (scheduledCount >= limit) break;
       if (dateKey < today) continue; // don't schedule into the past
-      if (MIN_DATE && dateKey < MIN_DATE) continue; // respect manual pre-fill
+      if (channelMinDate && dateKey < channelMinDate) continue; // respect this channel's manual pre-fill
       if (scheduledDates.has(dateKey)) continue; // already scheduled
 
       const { fileId, title } = calendar[dateKey];
