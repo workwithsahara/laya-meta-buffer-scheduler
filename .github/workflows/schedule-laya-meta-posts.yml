@@ -27,6 +27,7 @@ jobs:
           BUFFER_ORG_ID: ${{ secrets.BUFFER_ORG_ID }}
           BUFFER_CHANNEL_IDS: ${{ secrets.BUFFER_CHANNEL_IDS }}
           BUFFER_MIN_DATE: ${{ secrets.BUFFER_MIN_DATE }}
+          BUFFER_CHANNEL_MIN_DATES: ${{ secrets.BUFFER_CHANNEL_MIN_DATES }}
           GOOGLE_DRIVE_API_KEY: ${{ secrets.GOOGLE_DRIVE_API_KEY }}
           LAYA_ROOT_FOLDER_ID: ${{ secrets.LAYA_ROOT_FOLDER_ID }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
