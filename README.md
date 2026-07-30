@@ -68,7 +68,7 @@ date — it'll only ever fill in Aug 13 onward.
 | `BUFFER_ORG_ID` | `6a6b89d20be6bb6ef0dce5a5` |
 | `BUFFER_CHANNEL_IDS` | `6a6b8a194b2d03035f6cf7e8,6a6b8bc04b2d03035f6cffca,6a6b8c854b2d03035f6d0308` |
 | `BUFFER_MIN_DATE` | `2026-08-13` |
-| `GOOGLE_DRIVE_API_KEY` | your Drive API key |
+| `GOOGLE_DRIVE_API_KEY` | `AIzaSyBr9d3O-D7IF4zaGcqUDC8UQbaIkacDjhI` |
 | `LAYA_ROOT_FOLDER_ID` | `17baWNJiOazZvoPNT--M6w2Sy8XbcU7xi` |
 
 ### 7. Test it
