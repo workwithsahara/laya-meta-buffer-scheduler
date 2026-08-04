@@ -1,26 +1,23 @@
 name: Top up LAYA Meta Buffer queue
-
 on:
   schedule:
-    # Runs daily at 08:00 UTC (4:00 PM Manila). Adjust as you like.
-    - cron: "0 8 * * *"
+    # Every 2 hours - frequent enough to keep the 4h PROMO cadence topped
+    # up without gaps (MAIN is once/day so this comfortably covers both).
+    - cron: "0 */2 * * *"
   workflow_dispatch:
     inputs:
       dry_run:
         description: "Dry run (log only, don't create posts)"
         type: boolean
         default: false
-
 jobs:
   schedule-posts:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-
       - name: Run scheduler
         env:
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
@@ -30,5 +27,7 @@ jobs:
           BUFFER_CHANNEL_MIN_DATES: ${{ secrets.BUFFER_CHANNEL_MIN_DATES }}
           GOOGLE_DRIVE_API_KEY: ${{ secrets.GOOGLE_DRIVE_API_KEY }}
           LAYA_ROOT_FOLDER_ID: ${{ secrets.LAYA_ROOT_FOLDER_ID }}
+          PROMO_ROOT_FOLDER_ID: ${{ secrets.PROMO_ROOT_FOLDER_ID }}
+          PROMO_CAPTION: ${{ secrets.PROMO_CAPTION }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         run: node schedule-laya-meta-posts.js
