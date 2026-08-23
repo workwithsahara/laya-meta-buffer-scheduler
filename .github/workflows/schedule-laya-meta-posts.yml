@@ -1,7 +1,7 @@
 name: Top up LAYA Meta Buffer queue
 on:
   schedule:
-    # Every 2 hours - frequent enough to keep the 4h PROMO cadence topped
+    # Every 2 hours - frequent enough to keep the 24h PROMO cadence topped
     # up without gaps (MAIN is once/day so this comfortably covers both).
     - cron: "0 */2 * * *"
   workflow_dispatch:
@@ -29,5 +29,6 @@ jobs:
           LAYA_ROOT_FOLDER_ID: ${{ secrets.LAYA_ROOT_FOLDER_ID }}
           PROMO_ROOT_FOLDER_ID: ${{ secrets.PROMO_ROOT_FOLDER_ID }}
           PROMO_CAPTION: ${{ secrets.PROMO_CAPTION }}
+          PROMO_INTERVAL_HOURS: "24"
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         run: node schedule-laya-meta-posts.js
