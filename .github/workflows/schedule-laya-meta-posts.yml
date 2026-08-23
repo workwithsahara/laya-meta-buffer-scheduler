@@ -30,5 +30,7 @@ jobs:
           PROMO_ROOT_FOLDER_ID: ${{ secrets.PROMO_ROOT_FOLDER_ID }}
           PROMO_CAPTION: ${{ secrets.PROMO_CAPTION }}
           PROMO_INTERVAL_HOURS: "24"
+          COACHING_ROOT_FOLDER_ID: ${{ secrets.COACHING_ROOT_FOLDER_ID }}
+          COACHING_INTERVAL_HOURS: "8"
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         run: node schedule-laya-meta-posts.js
