@@ -861,6 +861,7 @@ async function main() {
     let filled = 0;
     let consecutiveFailures = 0;
     const MAX_CONSECUTIVE_FAILURES = 3;
+    let kindFailed = false; // if a text post is ever rejected, pause only that track for this run
 
     while (filled < slotsToFill) {
       // Skip any MAIN candidate whose real due time has already passed --
@@ -898,7 +899,7 @@ async function main() {
         winnerTime = coachingTime;
       }
       const kindTime = kindnessTimeForSlot(nextKindSlot);
-      if (textAllowed && (winnerTime === null || kindTime.getTime() < winnerTime.getTime())) {
+      if (textAllowed && !kindFailed && (winnerTime === null || kindTime.getTime() < winnerTime.getTime())) {
         winner = "KINDNESS";
         winnerTime = kindTime;
       }
@@ -939,6 +940,11 @@ async function main() {
         consecutiveFailures = 0;
       } catch (err) {
         console.error(`  Failed to schedule ${winner} slot (${dueAtIso}): ${err.message}`);
+        if (winner === "KINDNESS" && !/limit/i.test(err.message)) {
+          kindFailed = true;
+          console.error("  KINDNESS track paused for the rest of this run (text post was rejected).");
+          continue;
+        }
         consecutiveFailures++;
         if (/limit/i.test(err.message)) {
           console.log("  Buffer reports the scheduled-post limit is reached. Stopping this channel.");
