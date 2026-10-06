@@ -104,6 +104,30 @@ const PROMO_EPOCH_START = new Date("2026-08-05T00:00:00Z");
 const COACHING_EPOCH_START = new Date("2026-08-23T00:00:00Z");
 const LEAD_BUFFER_MS = 5 * 60 * 1000; // 5-minute lead so dueAt is always in the future
 
+// ---------------------------------------------------------------------------
+// KINDNESS track: one text-only "kindness quote + reflection question" post
+// per day at 6:00 AM Manila, read from kindness-365.json (365 posts, repeats
+// every 365 days). Stateless: the post is chosen from the fixed daily grid
+// below, so no counter is stored anywhere. Text-only, so it is only used on
+// networks that accept posts without an image (not Instagram or TikTok).
+// ---------------------------------------------------------------------------
+const fs = require("fs");
+const path = require("path");
+let KINDNESS_POSTS = [];
+try {
+  KINDNESS_POSTS = JSON.parse(fs.readFileSync(path.join(__dirname, "kindness-365.json"), "utf8"));
+} catch (err) {
+  console.warn(`KINDNESS: could not load kindness-365.json (${err.message}). Track disabled.`);
+}
+const KINDNESS_SET = new Set(KINDNESS_POSTS.map((t) => t.trim()));
+const KINDNESS_EPOCH_START = new Date("2026-10-07T22:00:00Z"); // 6:00 AM Manila on 2026-10-08. Never change once live.
+const KINDNESS_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const KINDNESS_TEXT_SERVICES = new Set(["facebook", "threads", "linkedin"]);
+function isKindness(text) { return KINDNESS_SET.has((text || "").trim()); }
+function kindnessTimeForSlot(slot) { return new Date(KINDNESS_EPOCH_START.getTime() + slot * KINDNESS_INTERVAL_MS); }
+function kindnessSlotForTime(date) { return Math.round((date.getTime() - KINDNESS_EPOCH_START.getTime()) / KINDNESS_INTERVAL_MS); }
+function kindnessIndexForSlot(slot) { return ((slot % KINDNESS_POSTS.length) + KINDNESS_POSTS.length) % KINDNESS_POSTS.length; }
+
 // Fixed CTA appended to every COACHING post's caption. Also doubles as the
 // classification marker (a scheduled post is COACHING if its text contains
 // this substring).
@@ -707,15 +731,18 @@ async function createPost({ channelId, service, fileId, title, dueAtIso }) {
     schedulingType: "automatic",
     dueAt: dueAtIso,
     text: title || undefined,
-    assets: [
+  };
+  // Text-only posts (KINDNESS track) have no image.
+  if (fileId) {
+    input.assets = [
       {
         image: {
           url: `https://lh3.googleusercontent.com/d/${fileId}`,
           metadata: { altText: title || "LAYA" },
         },
       },
-    ],
-  };
+    ];
+  }
 
   // Facebook and Instagram require an explicit post "type" -- applies to
   // ALL THREE tracks, since it's a per-network requirement, not a
@@ -767,6 +794,7 @@ async function main() {
 
   for (const channelId of CHANNEL_IDS) {
     const service = services[channelId] || "unknown";
+    const textAllowed = KINDNESS_POSTS.length > 0 && KINDNESS_TEXT_SERVICES.has(service);
     const channelMinDate = minDateFor(channelId);
     console.log(`\nChannel ${channelId} (${service}) -- MAIN minimum date: ${channelMinDate || "(none -- starts today)"}`);
 
@@ -778,17 +806,18 @@ async function main() {
       continue;
     }
 
+    const kindScheduled = scheduled.filter((p) => isKindness(p.text));
     const promoScheduled = scheduled.filter((p) => p.text === PROMO_CAPTION);
     const coachingScheduled = scheduled.filter(
-      (p) => p.text !== PROMO_CAPTION && p.text.includes(COACHING_CTA_MARKER)
+      (p) => p.text !== PROMO_CAPTION && !isKindness(p.text) && p.text.includes(COACHING_CTA_MARKER)
     );
     const mainScheduled = scheduled.filter(
-      (p) => p.text !== PROMO_CAPTION && !p.text.includes(COACHING_CTA_MARKER)
+      (p) => p.text !== PROMO_CAPTION && !isKindness(p.text) && !p.text.includes(COACHING_CTA_MARKER)
     );
     const scheduledMainDates = new Set(mainScheduled.map((p) => p.dueAt.toISOString().slice(0, 10)));
 
     console.log(
-      `  ${scheduled.length}/${limit} total slots used (MAIN: ${mainScheduled.length}, PROMO: ${promoScheduled.length}, COACHING: ${coachingScheduled.length}).`
+      `  ${scheduled.length}/${limit} total slots used (MAIN: ${mainScheduled.length}, PROMO: ${promoScheduled.length}, COACHING: ${coachingScheduled.length}, KINDNESS: ${kindScheduled.length}).`
     );
 
     const slotsToFill = limit - scheduled.length;
@@ -821,6 +850,13 @@ async function main() {
       ? Math.max(...coachingScheduled.map((p) => slotIndexForTime(p.dueAt, COACHING_EPOCH_START, COACHING_INTERVAL_MS)))
       : -1;
     let nextCoachingSlot = Math.max(nowCoachingSlot, latestCoachingSlot + 1);
+
+    // KINDNESS candidates: next empty daily slot on the fixed 6 AM Manila grid.
+    const nowKindSlot = Math.max(0, Math.ceil((Date.now() + LEAD_BUFFER_MS - KINDNESS_EPOCH_START.getTime()) / KINDNESS_INTERVAL_MS));
+    const latestKindSlot = kindScheduled.length
+      ? Math.max(...kindScheduled.map((p) => kindnessSlotForTime(p.dueAt)))
+      : -1;
+    let nextKindSlot = Math.max(nowKindSlot, latestKindSlot + 1);
 
     let filled = 0;
     let consecutiveFailures = 0;
@@ -861,8 +897,13 @@ async function main() {
         winner = "COACHING";
         winnerTime = coachingTime;
       }
+      const kindTime = kindnessTimeForSlot(nextKindSlot);
+      if (textAllowed && (winnerTime === null || kindTime.getTime() < winnerTime.getTime())) {
+        winner = "KINDNESS";
+        winnerTime = kindTime;
+      }
       if (winner === null) {
-        console.log("  No more MAIN or COACHING content to schedule. Stopping this channel.");
+        console.log("  No more MAIN, COACHING or KINDNESS content to schedule. Stopping this channel.");
         break;
       }
 
@@ -878,6 +919,10 @@ async function main() {
         fileId = coachingImages[imageIndex].id;
         title = `${COACHING_CAPTIONS[captionIndex]}\n\n${COACHING_CTA}`;
         dueAt = coachingTime;
+      } else if (winner === "KINDNESS") {
+        fileId = null;
+        title = KINDNESS_POSTS[kindnessIndexForSlot(nextKindSlot)];
+        dueAt = kindTime;
       } else {
         const imageIndex = ((nextPromoSlot % promoImages.length) + promoImages.length) % promoImages.length;
         fileId = promoImages[imageIndex].id;
@@ -909,6 +954,8 @@ async function main() {
         mainPointer++;
       } else if (winner === "COACHING") {
         nextCoachingSlot++;
+      } else if (winner === "KINDNESS") {
+        nextKindSlot++;
       } else {
         nextPromoSlot++;
       }
