@@ -849,15 +849,21 @@ async function main() {
       // Pick whichever of the three next candidates is chronologically
       // earliest -- this is what actually splits the shared cap between
       // all three tracks instead of one starving the others.
-      let winner = "PROMO";
-      let winnerTime = promoTime;
-      if (mainAvailable && mainTime.getTime() < winnerTime.getTime()) {
+      // PROMO track is permanently disabled (no promotional posts, ever).
+      // Only MAIN and COACHING compete for the available slots.
+      let winner = null;
+      let winnerTime = null;
+      if (mainAvailable) {
         winner = "MAIN";
         winnerTime = mainTime;
       }
-      if (coachingTime.getTime() < winnerTime.getTime()) {
+      if (coachingImages.length > 0 && (winnerTime === null || coachingTime.getTime() < winnerTime.getTime())) {
         winner = "COACHING";
         winnerTime = coachingTime;
+      }
+      if (winner === null) {
+        console.log("  No more MAIN or COACHING content to schedule. Stopping this channel.");
+        break;
       }
 
       let fileId, title, dueAt;
