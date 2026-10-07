@@ -1,0 +1,17 @@
+name: One-off publish test
+on:
+  workflow_dispatch:
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Publish test post
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          BUFFER_ORG_ID: ${{ secrets.BUFFER_ORG_ID }}
+          BUFFER_CHANNEL_IDS: ${{ secrets.BUFFER_CHANNEL_IDS }}
+        run: node publish-test-now.js
