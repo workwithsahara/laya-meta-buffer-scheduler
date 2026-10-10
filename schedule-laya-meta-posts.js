@@ -161,6 +161,22 @@ const STORY_THREADS_MAX = 500;
 // opened with a rotating hook line, and the DM line instead of the booking link.
 const STORY_IMAGE_URL = "https://raw.githubusercontent.com/workwithsahara/laya-meta-buffer-scheduler/main/laya-story-image.jpg";
 const STORY_IMAGE_SERVICES = new Set(["instagram", "tiktok"]);
+
+// Instagram and TikTok story posts now use a 10 second video (laya-story-video.mp4 in the
+// laya-meta-buffer-scheduler repo). If the video is not reachable the still image is used, so
+// no post is ever missed. Posts already in the queue with the image are upgraded to the video.
+const STORY_VIDEO_URL = "https://raw.githubusercontent.com/workwithsahara/laya-meta-buffer-scheduler/main/laya-story-video.mp4";
+let STORY_VIDEO_READY = false;
+async function checkStoryVideo() {
+  try {
+    const res = await fetch(STORY_VIDEO_URL, { method: "HEAD" });
+    STORY_VIDEO_READY = res.ok;
+  } catch (e) {
+    STORY_VIDEO_READY = false;
+  }
+  console.log(`STORY media: ${STORY_VIDEO_READY ? "video found, Instagram/TikTok story posts will be video" : "video NOT found, using the image"}.`);
+}
+function storyMedia() { return STORY_VIDEO_READY ? STORY_VIDEO_URL : STORY_IMAGE_URL; }
 const STORY_HOOKS = [
   "Did I get your attention?",
   "Okay, now that I have you.",
@@ -759,15 +775,58 @@ async function getScheduledPosts(channelId) {
   const query = `
     query Posts($organizationId: OrganizationId!, $channelIds: [ChannelId!]) {
       posts(input: { organizationId: $organizationId, filter: { channelIds: $channelIds, status: [scheduled] } }, first: 100) {
-        edges { node { dueAt text } }
+        edges { node { id dueAt text assets { type } } }
       }
     }
   `;
   const data = await bufferRequest(query, { organizationId: ORG_ID, channelIds: [channelId] });
   return data.posts.edges.map((e) => ({
+    id: e.node.id,
     dueAt: new Date(e.node.dueAt),
     text: e.node.text || "",
+    hasVideo: (e.node.assets || []).some((a) => a.type === "video"),
   }));
+}
+
+// Swap the still image for the video on story posts that are already queued.
+async function upgradeQueuedStories(posts, service, channelId) {
+  if (!STORY_VIDEO_READY || !STORY_IMAGE_SERVICES.has(service)) return;
+  const todo = posts.filter((p) => p.id && isStory(p.text) && !p.hasVideo && p.dueAt.getTime() > Date.now() + 15 * 60 * 1000);
+  if (todo.length === 0) return;
+  console.log(`Upgrading ${todo.length} queued story post(s) from image to video.`);
+  const mutation = `
+    mutation EditPost($input: EditPostInput!) {
+      editPost(input: $input) {
+        ... on PostActionSuccess { post { id } }
+        ... on InvalidInputError { message }
+        ... on UnexpectedError { message }
+        ... on NotFoundError { message }
+        ... on UnauthorizedError { message }
+        ... on LimitReachedError { message }
+      }
+    }
+  `;
+  for (const p of todo) {
+    const input = {
+      id: p.id,
+      assets: [{ video: { url: STORY_VIDEO_URL } }],
+      mode: "customScheduled",
+      schedulingType: "automatic",
+      dueAt: p.dueAt.toISOString(),
+    };
+    if (service === "instagram") input.metadata = { instagram: { type: "reel", shouldShareToFeed: true } };
+    if (DRY_RUN) {
+      console.log(`[DRY RUN] Would upgrade post ${p.id} (${p.dueAt.toISOString()}) to video.`);
+      continue;
+    }
+    try {
+      const data = await bufferRequest(mutation, { input });
+      if (data.editPost && data.editPost.message) throw new Error(data.editPost.message);
+      console.log(`Upgraded post ${p.id} (${p.dueAt.toISOString()}) to video.`);
+    } catch (err) {
+      console.error(`Could not upgrade post ${p.id}: ${err.message}. It stays as the image.`);
+    }
+  }
 }
 
 async function createPost({ channelId, service, fileId, title, dueAtIso }) {
@@ -789,7 +848,10 @@ async function createPost({ channelId, service, fileId, title, dueAtIso }) {
     text: title || undefined,
   };
   // Text-only posts (KINDNESS track) have no image.
-  if (fileId) {
+  const isVideo = typeof fileId === "string" && /\.mp4$/i.test(fileId);
+  if (fileId && isVideo) {
+    input.assets = [{ video: { url: fileId } }];
+  } else if (fileId) {
     input.assets = [
       {
         image: {
@@ -806,7 +868,7 @@ async function createPost({ channelId, service, fileId, title, dueAtIso }) {
   if (service === "facebook") {
     input.metadata = { facebook: { type: "post" } };
   } else if (service === "instagram") {
-    input.metadata = { instagram: { type: "post", shouldShareToFeed: true } };
+    input.metadata = { instagram: { type: isVideo ? "reel" : "post", shouldShareToFeed: true } };
   }
   // Threads doesn't require an explicit type -- leave as-is.
 
@@ -822,11 +884,26 @@ async function createPost({ channelId, service, fileId, title, dueAtIso }) {
   console.log(`Scheduled: channel=${channelId} (${service}) dueAt=${dueAtIso} title="${title}" -> post ${payload.post.id}`);
 }
 
+// If Buffer rejects the story video, post the image instead so the day is not missed.
+async function createPostWithFallback(args) {
+  try {
+    await createPost(args);
+  } catch (err) {
+    if (args.fileId === STORY_VIDEO_URL && !/limit/i.test(err.message)) {
+      console.warn(`Story video was rejected (${err.message}). Posting the image instead.`);
+      await createPost({ ...args, fileId: STORY_IMAGE_URL });
+    } else {
+      throw err;
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 async function main() {
   console.log(`Run started ${new Date().toISOString()}${DRY_RUN ? " [DRY RUN]" : ""}`);
+  await checkStoryVideo();
 
   const mainCalendar = await buildMainCalendar();
   const sortedMainDates = Object.keys(mainCalendar).sort();
@@ -862,6 +939,7 @@ async function main() {
       continue;
     }
 
+    await upgradeQueuedStories(scheduled, service, channelId);
     const kindScheduled = scheduled.filter((p) => isKindness(p.text));
     const storyScheduled = scheduled.filter((p) => isStory(p.text));
     const promoScheduled = scheduled.filter((p) => p.text === PROMO_CAPTION);
@@ -993,7 +1071,7 @@ async function main() {
         title = `${COACHING_CAPTIONS[captionIndex]}\n\n${COACHING_CTA}`;
         dueAt = coachingTime;
       } else if (winner === "STORY") {
-        fileId = STORY_IMAGE_SERVICES.has(service) ? STORY_IMAGE_URL : null;
+        fileId = STORY_IMAGE_SERVICES.has(service) ? storyMedia() : null;
         title = storyText(nextStorySlot, service);
         dueAt = storyTime;
         if (service === "threads" && title.length > STORY_THREADS_MAX) {
@@ -1016,7 +1094,7 @@ async function main() {
       const dueAtIso = dueAt.toISOString();
 
       try {
-        await createPost({ channelId, service, fileId, title, dueAtIso });
+        await createPostWithFallback({ channelId, service, fileId, title, dueAtIso });
         console.log(`  (${winner})`);
         filled++;
         consecutiveFailures = 0;
