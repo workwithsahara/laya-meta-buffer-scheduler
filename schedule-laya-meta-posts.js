@@ -981,10 +981,15 @@ async function postStoryNow() {
     if (service === "threads" && title.length > STORY_THREADS_MAX) { console.log("Threads: story too long, skipped"); continue; }
     const media = STORY_IMAGE_SERVICES.has(service) ? storyMedia() : null;
     try {
+      if (process.env.POST_NOW_CLEANUP_ONLY) { await deleteQueuedStorySlot(channelId, slot); continue; }
       await createPostWithFallback({ channelId, service, fileId: media, title, dueAtIso: new Date().toISOString() });
       console.log(`POSTED NOW to ${service} (${channelId}), media: ${media || "text only"}`);
       await deleteQueuedStorySlot(channelId, slot);
-    } catch (e) { console.error(`FAILED ${service} (${channelId}): ${e.message}`); }
+    } catch (e) {
+      console.error(`FAILED ${service} (${channelId}): ${e.message}`);
+      // Buffer refuses an identical post close in time: the story is already live on this channel, so drop its queued copy.
+      if (/same thing twice|already got this one/i.test(e.message)) await deleteQueuedStorySlot(channelId, slot);
+    }
   }
 }
 
