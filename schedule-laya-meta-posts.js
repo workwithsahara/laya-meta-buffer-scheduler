@@ -182,12 +182,48 @@ const STORY_HOOKS = [
   "Okay, now that I have you.",
   "Scary, right? Not as scary as a page that went quiet.",
 ];
-function isStory(text) {
-  let t = (text || "").trim();
-  for (const h of STORY_HOOKS) {
-    if (t.startsWith(h + "\n\n")) { t = t.slice(h.length).trim(); break; }
+let STORY_INTROS = [];
+try {
+  STORY_INTROS = JSON.parse(fs.readFileSync(path.join(__dirname, "story-hooks-365.json"), "utf8"));
+} catch (err) {
+  console.warn(`STORY: could not load story-hooks-365.json (${err.message}). Using the old rotating hook lines.`);
+  STORY_INTROS = [];
+}
+const STORY_IDENTITY = "We're LAYA 365. We write a full year of posts for small business owners and build their websites.";
+function storyUseIntros() { return STORY_INTROS.length > 0 && STORY_INTROS.length === STORY_POSTS.length; }
+// Instagram/TikTok caption: an intro line that follows the scary video and leads into this story,
+// then the story, with one line saying who we are (only when the story does not already name LAYA).
+function storyIgCaption(idx, body) {
+  if (!storyUseIntros()) return STORY_HOOKS[idx % STORY_HOOKS.length] + "\n\n" + body;
+  let text = body;
+  if (!/LAYA/.test(body)) {
+    const paras = body.split("\n\n");
+    paras.splice(Math.max(paras.length - 1, 0), 0, STORY_IDENTITY);
+    text = paras.join("\n\n");
   }
-  return STORY_SET.has(t);
+  return STORY_INTROS[idx] + "\n\n" + text;
+}
+let STORY_TEXT_IDX = null;
+function storyTextIndex() {
+  if (STORY_TEXT_IDX) return STORY_TEXT_IDX;
+  const m = new Map();
+  STORY_POSTS.forEach((t, idx) => {
+    const dm = t.split(STORY_LINK_LINE).join(STORY_DM_LINE);
+    m.set(t.trim(), idx);
+    m.set(dm.trim(), idx);
+    for (const h of STORY_HOOKS) m.set((h + "\n\n" + dm).trim(), idx);
+    if (storyUseIntros()) m.set(storyIgCaption(idx, dm).trim(), idx);
+  });
+  STORY_TEXT_IDX = m;
+  return m;
+}
+function storyDesiredCaption(text) {
+  const idx = storyTextIndex().get((text || "").trim());
+  if (idx === undefined) return null;
+  return storyIgCaption(idx, STORY_POSTS[idx].split(STORY_LINK_LINE).join(STORY_DM_LINE));
+}
+function isStory(text) {
+  return storyTextIndex().has((text || "").trim());
 }
 function storyTimeForSlot(slot) { return new Date(STORY_EPOCH_START.getTime() + slot * STORY_INTERVAL_MS); }
 function storySlotForTime(date) { return Math.round((date.getTime() - STORY_EPOCH_START.getTime()) / STORY_INTERVAL_MS); }
@@ -196,7 +232,7 @@ function storyText(slot, service) {
   const idx = storyIndexForSlot(slot);
   const t = STORY_POSTS[idx];
   const body = service === "linkedin" ? t : t.split(STORY_LINK_LINE).join(STORY_DM_LINE);
-  if (STORY_IMAGE_SERVICES.has(service)) return STORY_HOOKS[idx % STORY_HOOKS.length] + "\n\n" + body;
+  if (STORY_IMAGE_SERVICES.has(service)) return storyIgCaption(idx, body);
   return body;
 }
 
@@ -791,9 +827,9 @@ async function getScheduledPosts(channelId) {
 // Swap the still image for the video on story posts that are already queued.
 async function upgradeQueuedStories(posts, service, channelId) {
   if (!STORY_VIDEO_READY || !STORY_IMAGE_SERVICES.has(service)) return;
-  const todo = posts.filter((p) => p.id && isStory(p.text) && !p.hasVideo && p.dueAt.getTime() > Date.now() + 15 * 60 * 1000);
+  const todo = posts.filter((p) => p.id && isStory(p.text) && p.dueAt.getTime() > Date.now() + 15 * 60 * 1000 && (!p.hasVideo || storyDesiredCaption(p.text) !== (p.text || "").trim()));
   if (todo.length === 0) return;
-  console.log(`Upgrading ${todo.length} queued story post(s) from image to video.`);
+  console.log(`Upgrading ${todo.length} queued story post(s) from image to video / new caption.`);
   const mutation = `
     mutation EditPost($input: EditPostInput!) {
       editPost(input: $input) {
@@ -814,6 +850,8 @@ async function upgradeQueuedStories(posts, service, channelId) {
       schedulingType: "automatic",
       dueAt: p.dueAt.toISOString(),
     };
+    const wantText = storyDesiredCaption(p.text);
+    if (wantText && wantText !== (p.text || "").trim()) input.text = wantText;
     if (service === "instagram") input.metadata = { instagram: { type: "reel", shouldShareToFeed: true } };
     if (DRY_RUN) {
       console.log(`[DRY RUN] Would upgrade post ${p.id} (${p.dueAt.toISOString()}) to video.`);
