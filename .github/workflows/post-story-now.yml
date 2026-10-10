@@ -28,4 +28,5 @@ jobs:
           COACHING_INTERVAL_HOURS: "8"
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
           POST_NOW_STORY: "0"
+          POST_NOW_CLEANUP_ONLY: "1"
         run: node schedule-laya-meta-posts.js
