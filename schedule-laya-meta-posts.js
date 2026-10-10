@@ -872,6 +872,7 @@ async function createPost({ channelId, service, fileId, title, dueAtIso }) {
   }
   // Threads doesn't require an explicit type -- leave as-is.
 
+  if (process.env.POST_NOW_STORY) { input.mode = "shareNow"; delete input.dueAt; }
   if (DRY_RUN) {
     console.log(`[DRY RUN] Would create post: channel=${channelId} (${service}) dueAt=${dueAtIso} title="${title}"`);
     return;
@@ -901,9 +902,27 @@ async function createPostWithFallback(args) {
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
+async function postStoryNow() {
+  const slot = parseInt(process.env.POST_NOW_STORY, 10);
+  const services = await getChannelServices(CHANNEL_IDS);
+  for (const channelId of CHANNEL_IDS) {
+    const service = services[channelId] || "unknown";
+    const allowed = KINDNESS_TEXT_SERVICES.has(service) || STORY_IMAGE_SERVICES.has(service);
+    if (!allowed) { console.log(`Skipping ${channelId} (${service})`); continue; }
+    const title = storyText(slot, service);
+    if (service === "threads" && title.length > STORY_THREADS_MAX) { console.log("Threads: story too long, skipped"); continue; }
+    const media = STORY_IMAGE_SERVICES.has(service) ? storyMedia() : null;
+    try {
+      await createPostWithFallback({ channelId, service, fileId: media, title, dueAtIso: new Date().toISOString() });
+      console.log(`POSTED NOW to ${service} (${channelId}), media: ${media || "text only"}`);
+    } catch (e) { console.error(`FAILED ${service} (${channelId}): ${e.message}`); }
+  }
+}
+
 async function main() {
   console.log(`Run started ${new Date().toISOString()}${DRY_RUN ? " [DRY RUN]" : ""}`);
   await checkStoryVideo();
+  if (process.env.POST_NOW_STORY) { await postStoryNow(); return; }
 
   const mainCalendar = await buildMainCalendar();
   const sortedMainDates = Object.keys(mainCalendar).sort();
