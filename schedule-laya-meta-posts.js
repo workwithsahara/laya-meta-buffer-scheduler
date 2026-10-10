@@ -128,6 +128,44 @@ function kindnessTimeForSlot(slot) { return new Date(KINDNESS_EPOCH_START.getTim
 function kindnessSlotForTime(date) { return Math.round((date.getTime() - KINDNESS_EPOCH_START.getTime()) / KINDNESS_INTERVAL_MS); }
 function kindnessIndexForSlot(slot) { return ((slot % KINDNESS_POSTS.length) + KINDNESS_POSTS.length) % KINDNESS_POSTS.length; }
 
+// ---------------------------------------------------------------------------
+// STORY track: one text-only "LAYA 365 story" post per day at 11:00 PM Manila,
+// read from story-365-part1..4.json (365 posts, written with the booking link,
+// repeats every 365 days). Facebook and Threads limit link posts, so on every
+// service except LinkedIn the booking line is swapped for a DM line. Stateless
+// like KINDNESS: the post is picked from a fixed daily grid, nothing is stored.
+// Threads allows 500 characters, so longer stories are skipped on Threads only.
+// ---------------------------------------------------------------------------
+const STORY_LINK_LINE = "Pick a time at laya365.com/contact";
+const STORY_DM_LINE = "Send us a DM and we'll find a time.";
+let STORY_POSTS = [];
+for (let i = 1; i <= 4; i++) {
+  try {
+    STORY_POSTS = STORY_POSTS.concat(JSON.parse(fs.readFileSync(path.join(__dirname, `story-365-part${i}.json`), "utf8")));
+  } catch (err) {
+    console.warn(`STORY: could not load story-365-part${i}.json (${err.message}). Track disabled.`);
+    STORY_POSTS = [];
+    break;
+  }
+}
+const STORY_SET = new Set();
+STORY_POSTS.forEach((t) => {
+  STORY_SET.add(t.trim());
+  STORY_SET.add(t.split(STORY_LINK_LINE).join(STORY_DM_LINE).trim());
+});
+const STORY_EPOCH_START = new Date("2026-10-10T15:00:00Z"); // 11:00 PM Manila. Never change once live.
+const STORY_START_INDEX = 0; // index of the story posted in slot 0
+const STORY_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const STORY_THREADS_MAX = 500;
+function isStory(text) { return STORY_SET.has((text || "").trim()); }
+function storyTimeForSlot(slot) { return new Date(STORY_EPOCH_START.getTime() + slot * STORY_INTERVAL_MS); }
+function storySlotForTime(date) { return Math.round((date.getTime() - STORY_EPOCH_START.getTime()) / STORY_INTERVAL_MS); }
+function storyIndexForSlot(slot) { return (((STORY_START_INDEX + slot) % STORY_POSTS.length) + STORY_POSTS.length) % STORY_POSTS.length; }
+function storyText(slot, service) {
+  const t = STORY_POSTS[storyIndexForSlot(slot)];
+  return service === "linkedin" ? t : t.split(STORY_LINK_LINE).join(STORY_DM_LINE);
+}
+
 // Fixed CTA appended to every COACHING post's caption. Also doubles as the
 // classification marker (a scheduled post is COACHING if its text contains
 // this substring).
@@ -807,17 +845,18 @@ async function main() {
     }
 
     const kindScheduled = scheduled.filter((p) => isKindness(p.text));
+    const storyScheduled = scheduled.filter((p) => isStory(p.text));
     const promoScheduled = scheduled.filter((p) => p.text === PROMO_CAPTION);
     const coachingScheduled = scheduled.filter(
-      (p) => p.text !== PROMO_CAPTION && !isKindness(p.text) && p.text.includes(COACHING_CTA_MARKER)
+      (p) => p.text !== PROMO_CAPTION && !isKindness(p.text) && !isStory(p.text) && p.text.includes(COACHING_CTA_MARKER)
     );
     const mainScheduled = scheduled.filter(
-      (p) => p.text !== PROMO_CAPTION && !isKindness(p.text) && !p.text.includes(COACHING_CTA_MARKER)
+      (p) => p.text !== PROMO_CAPTION && !isKindness(p.text) && !isStory(p.text) && !p.text.includes(COACHING_CTA_MARKER)
     );
     const scheduledMainDates = new Set(mainScheduled.map((p) => p.dueAt.toISOString().slice(0, 10)));
 
     console.log(
-      `  ${scheduled.length}/${limit} total slots used (MAIN: ${mainScheduled.length}, PROMO: ${promoScheduled.length}, COACHING: ${coachingScheduled.length}, KINDNESS: ${kindScheduled.length}).`
+      `  ${scheduled.length}/${limit} total slots used (MAIN: ${mainScheduled.length}, PROMO: ${promoScheduled.length}, COACHING: ${coachingScheduled.length}, KINDNESS: ${kindScheduled.length}, STORY: ${storyScheduled.length}).`
     );
 
     const slotsToFill = limit - scheduled.length;
@@ -858,9 +897,19 @@ async function main() {
       : -1;
     let nextKindSlot = Math.max(nowKindSlot, latestKindSlot + 1);
 
+    // STORY candidates: next empty daily slot on the fixed 11 PM Manila grid.
+    const nowStorySlot = Math.max(0, Math.ceil((Date.now() + LEAD_BUFFER_MS - STORY_EPOCH_START.getTime()) / STORY_INTERVAL_MS));
+    const latestStorySlot = storyScheduled.length
+      ? Math.max(...storyScheduled.map((p) => storySlotForTime(p.dueAt)))
+      : -1;
+    let nextStorySlot = Math.max(nowStorySlot, latestStorySlot + 1);
+    let storySkips = 0;
+    const storyAllowed = STORY_POSTS.length > 0 && KINDNESS_TEXT_SERVICES.has(service);
+
     let filled = 0;
     let consecutiveFailures = 0;
     const MAX_CONSECUTIVE_FAILURES = 3;
+    let storyFailed = false; // if a story post is ever rejected, pause only that track for this run
     let kindFailed = false; // if a text post is ever rejected, pause only that track for this run
 
     while (filled < slotsToFill) {
@@ -903,8 +952,13 @@ async function main() {
         winner = "KINDNESS";
         winnerTime = kindTime;
       }
+      const storyTime = storyTimeForSlot(nextStorySlot);
+      if (storyAllowed && !storyFailed && (winnerTime === null || storyTime.getTime() < winnerTime.getTime())) {
+        winner = "STORY";
+        winnerTime = storyTime;
+      }
       if (winner === null) {
-        console.log("  No more MAIN, COACHING or KINDNESS content to schedule. Stopping this channel.");
+        console.log("  No more MAIN, COACHING, KINDNESS or STORY content to schedule. Stopping this channel.");
         break;
       }
 
@@ -920,6 +974,16 @@ async function main() {
         fileId = coachingImages[imageIndex].id;
         title = `${COACHING_CAPTIONS[captionIndex]}\n\n${COACHING_CTA}`;
         dueAt = coachingTime;
+      } else if (winner === "STORY") {
+        fileId = null;
+        title = storyText(nextStorySlot, service);
+        dueAt = storyTime;
+        if (service === "threads" && title.length > STORY_THREADS_MAX) {
+          console.log(`  STORY slot ${nextStorySlot} is ${title.length} characters, over the Threads limit. Skipping on Threads.`);
+          nextStorySlot++;
+          if (++storySkips > STORY_POSTS.length) storyFailed = true;
+          continue;
+        }
       } else if (winner === "KINDNESS") {
         fileId = null;
         title = KINDNESS_POSTS[kindnessIndexForSlot(nextKindSlot)];
@@ -940,6 +1004,11 @@ async function main() {
         consecutiveFailures = 0;
       } catch (err) {
         console.error(`  Failed to schedule ${winner} slot (${dueAtIso}): ${err.message}`);
+        if (winner === "STORY" && !/limit/i.test(err.message)) {
+          storyFailed = true;
+          console.error("  STORY track paused for the rest of this run (text post was rejected).");
+          continue;
+        }
         if (winner === "KINDNESS" && !/limit/i.test(err.message)) {
           kindFailed = true;
           console.error("  KINDNESS track paused for the rest of this run (text post was rejected).");
@@ -960,6 +1029,8 @@ async function main() {
         mainPointer++;
       } else if (winner === "COACHING") {
         nextCoachingSlot++;
+      } else if (winner === "STORY") {
+        nextStorySlot++;
       } else if (winner === "KINDNESS") {
         nextKindSlot++;
       } else {
