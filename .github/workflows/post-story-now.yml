@@ -27,5 +27,5 @@ jobs:
           COACHING_ROOT_FOLDER_ID: ${{ secrets.COACHING_ROOT_FOLDER_ID }}
           COACHING_INTERVAL_HOURS: "8"
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
-          POST_NOW_STORY: "364"
+          POST_NOW_STORY: "0"
         run: node schedule-laya-meta-posts.js
