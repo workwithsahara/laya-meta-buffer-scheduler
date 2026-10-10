@@ -157,13 +157,31 @@ const STORY_EPOCH_START = new Date("2026-10-10T15:00:00Z"); // 11:00 PM Manila. 
 const STORY_START_INDEX = 0; // index of the story posted in slot 0
 const STORY_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const STORY_THREADS_MAX = 500;
-function isStory(text) { return STORY_SET.has((text || "").trim()); }
+// Instagram and TikTok cannot post text alone: they get the story as a caption on one fixed image,
+// opened with a rotating hook line, and the DM line instead of the booking link.
+const STORY_IMAGE_URL = "https://raw.githubusercontent.com/workwithsahara/laya-meta-buffer-scheduler/main/laya-story-image.jpg";
+const STORY_IMAGE_SERVICES = new Set(["instagram", "tiktok"]);
+const STORY_HOOKS = [
+  "Did I get your attention?",
+  "Okay, now that I have you.",
+  "Scary, right? Not as scary as a page that went quiet.",
+];
+function isStory(text) {
+  let t = (text || "").trim();
+  for (const h of STORY_HOOKS) {
+    if (t.startsWith(h + "\n\n")) { t = t.slice(h.length).trim(); break; }
+  }
+  return STORY_SET.has(t);
+}
 function storyTimeForSlot(slot) { return new Date(STORY_EPOCH_START.getTime() + slot * STORY_INTERVAL_MS); }
 function storySlotForTime(date) { return Math.round((date.getTime() - STORY_EPOCH_START.getTime()) / STORY_INTERVAL_MS); }
 function storyIndexForSlot(slot) { return (((STORY_START_INDEX + slot) % STORY_POSTS.length) + STORY_POSTS.length) % STORY_POSTS.length; }
 function storyText(slot, service) {
-  const t = STORY_POSTS[storyIndexForSlot(slot)];
-  return service === "linkedin" ? t : t.split(STORY_LINK_LINE).join(STORY_DM_LINE);
+  const idx = storyIndexForSlot(slot);
+  const t = STORY_POSTS[idx];
+  const body = service === "linkedin" ? t : t.split(STORY_LINK_LINE).join(STORY_DM_LINE);
+  if (STORY_IMAGE_SERVICES.has(service)) return STORY_HOOKS[idx % STORY_HOOKS.length] + "\n\n" + body;
+  return body;
 }
 
 // Fixed CTA appended to every COACHING post's caption. Also doubles as the
@@ -775,7 +793,7 @@ async function createPost({ channelId, service, fileId, title, dueAtIso }) {
     input.assets = [
       {
         image: {
-          url: `https://lh3.googleusercontent.com/d/${fileId}`,
+          url: /^https?:/.test(fileId) ? fileId : `https://lh3.googleusercontent.com/d/${fileId}`,
           metadata: { altText: title || "LAYA" },
         },
       },
@@ -904,7 +922,7 @@ async function main() {
       : -1;
     let nextStorySlot = Math.max(nowStorySlot, latestStorySlot + 1);
     let storySkips = 0;
-    const storyAllowed = STORY_POSTS.length > 0 && KINDNESS_TEXT_SERVICES.has(service);
+    const storyAllowed = STORY_POSTS.length > 0 && (KINDNESS_TEXT_SERVICES.has(service) || STORY_IMAGE_SERVICES.has(service));
 
     let filled = 0;
     let consecutiveFailures = 0;
@@ -975,7 +993,7 @@ async function main() {
         title = `${COACHING_CAPTIONS[captionIndex]}\n\n${COACHING_CTA}`;
         dueAt = coachingTime;
       } else if (winner === "STORY") {
-        fileId = null;
+        fileId = STORY_IMAGE_SERVICES.has(service) ? STORY_IMAGE_URL : null;
         title = storyText(nextStorySlot, service);
         dueAt = storyTime;
         if (service === "threads" && title.length > STORY_THREADS_MAX) {
