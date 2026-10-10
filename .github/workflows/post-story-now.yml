@@ -1,0 +1,31 @@
+name: Post story now (one-time test)
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (log only, don't create posts)"
+        type: boolean
+        default: false
+jobs:
+  schedule-posts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Run scheduler
+        env:
+          BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
+          BUFFER_ORG_ID: ${{ secrets.BUFFER_ORG_ID }}
+          BUFFER_CHANNEL_IDS: ${{ secrets.BUFFER_CHANNEL_IDS }}
+          BUFFER_MIN_DATE: ${{ secrets.BUFFER_MIN_DATE }}
+          BUFFER_CHANNEL_MIN_DATES: ${{ secrets.BUFFER_CHANNEL_MIN_DATES }}
+          GOOGLE_DRIVE_API_KEY: ${{ secrets.GOOGLE_DRIVE_API_KEY }}
+          LAYA_ROOT_FOLDER_ID: ${{ secrets.LAYA_ROOT_FOLDER_ID }}
+          PROMO_INTERVAL_HOURS: "24"
+          COACHING_ROOT_FOLDER_ID: ${{ secrets.COACHING_ROOT_FOLDER_ID }}
+          COACHING_INTERVAL_HOURS: "8"
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          POST_NOW_STORY: "364"
+        run: node schedule-laya-meta-posts.js
