@@ -71,8 +71,8 @@ const ORG_ID = requireEnv("BUFFER_ORG_ID");
 const CHANNEL_IDS = requireEnv("BUFFER_CHANNEL_IDS").split(",").map((s) => s.trim());
 const DRIVE_API_KEY = requireEnv("GOOGLE_DRIVE_API_KEY");
 const ROOT_FOLDER_ID = requireEnv("LAYA_ROOT_FOLDER_ID");
-const PROMO_ROOT_FOLDER_ID = requireEnv("PROMO_ROOT_FOLDER_ID");
-const PROMO_CAPTION = requireEnv("PROMO_CAPTION");
+const PROMO_ROOT_FOLDER_ID = process.env.PROMO_ROOT_FOLDER_ID || ""; // PROMO retired: leave unset
+const PROMO_CAPTION = process.env.PROMO_CAPTION || "__PROMO_RETIRED__";
 const COACHING_ROOT_FOLDER_ID = requireEnv("COACHING_ROOT_FOLDER_ID");
 
 const DEFAULT_MIN_DATE = process.env.BUFFER_MIN_DATE || null;
@@ -832,7 +832,7 @@ async function main() {
   const sortedMainDates = Object.keys(mainCalendar).sort();
   console.log(`MAIN: loaded ${sortedMainDates.length} days of dated content from Drive.`);
 
-  const promoImages = await listDriveImagesFlat(PROMO_ROOT_FOLDER_ID);
+  const promoImages = PROMO_ROOT_FOLDER_ID ? await listDriveImagesFlat(PROMO_ROOT_FOLDER_ID) : [];
   console.log(`PROMO: loaded ${promoImages.length} images from Drive.`);
 
   const coachingImages = await listDriveImagesFlat(COACHING_ROOT_FOLDER_ID);
