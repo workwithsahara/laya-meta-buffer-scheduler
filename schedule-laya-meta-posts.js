@@ -1040,6 +1040,7 @@ async function main() {
     }
 
     await upgradeQueuedStories(scheduled, service, channelId);
+    await AV.swapQueued({ bufferRequest, orgId: ORG_ID, channelId, service, dryRun: DRY_RUN });
     const kindScheduled = scheduled.filter((p) => isKindness(p.text));
     const storyScheduled = scheduled.filter((p) => isStory(p.text));
     const promoScheduled = scheduled.filter((p) => p.text === PROMO_CAPTION);
