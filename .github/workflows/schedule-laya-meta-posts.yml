@@ -13,13 +13,29 @@ on:
 jobs:
   schedule-posts:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - name: Make sure ffmpeg is installed
+        run: command -v ffmpeg >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg)
+      - name: Render upcoming quote videos
+        continue-on-error: true
+        env:
+          AUDIO_VIDEO: "on"
+          MEDIA_REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOGLE_DRIVE_API_KEY: ${{ secrets.GOOGLE_DRIVE_API_KEY }}
+          LAYA_ROOT_FOLDER_ID: ${{ secrets.LAYA_ROOT_FOLDER_ID }}
+        run: node render-upcoming.js
       - name: Run scheduler
         env:
+          AUDIO_VIDEO: "on"
+          MEDIA_REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           BUFFER_ORG_ID: ${{ secrets.BUFFER_ORG_ID }}
           BUFFER_CHANNEL_IDS: ${{ secrets.BUFFER_CHANNEL_IDS }}
