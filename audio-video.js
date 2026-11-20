@@ -53,13 +53,26 @@ function mediaUrl(fileId, version) {
   return `https://raw.githubusercontent.com/${MEDIA_REPO}/${MEDIA_BRANCH}/quotes/${fileId}-${version}.mp4`;
 }
 
-async function urlExists(url) {
-  try {
-    const res = await fetch(url, { method: "HEAD" });
-    return res.ok;
-  } catch (e) {
-    return false;
+// Existence is checked through the GitHub API (one directory listing per run), never by
+// requesting the raw URL: raw.githubusercontent.com caches a "not found" answer for a few
+// minutes, which would make Buffer fail to fetch a video we have only just uploaded.
+let existing = null; // Set of file names already on the media branch
+async function loadExisting() {
+  if (existing) return existing;
+  const headers = { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" };
+  if (GH_TOKEN) headers.Authorization = `Bearer ${GH_TOKEN}`;
+  const res = await fetch(`https://api.github.com/repos/${MEDIA_REPO}/contents/quotes?ref=${MEDIA_BRANCH}&per_page=1000`, { headers });
+  if (res.status === 404) {
+    existing = new Set();
+  } else if (res.ok) {
+    existing = new Set((await res.json()).map((f) => f.name));
+  } else {
+    throw new Error(`Cannot list the media branch: ${res.status}`);
   }
+  return existing;
+}
+async function videoExists(name) {
+  return (await loadExisting()).has(name);
 }
 
 async function driveDownload(fileId, dest) {
@@ -115,6 +128,7 @@ async function uploadVideo(name, buf) {
   if (sha) body.sha = sha;
   const r = await GH(p, { method: "PUT", body: JSON.stringify(body) });
   if (!r.ok) throw new Error(`Upload ${name}: ${r.status} ${await r.text()}`);
+  (await loadExisting()).add(name);
 }
 
 function renderMp4(imgPath, audioPath, outPath) {
@@ -144,7 +158,7 @@ async function getAudioVideoUrl(fileId) {
   const audio = await getAudio();
   const name = `${fileId}-${audio.version}.mp4`;
   const url = mediaUrl(fileId, audio.version);
-  if (await urlExists(url)) return url;
+  if (await videoExists(name)) return url;
   if (!CAN_RENDER) return null;
 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "av-"));
